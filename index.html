@@ -685,7 +685,9 @@
     let best = null, bestScore = -1;
     for (const d of dets) {
       const b = d.boundingBox; if (!b) continue;
+      const conf = d.categories && d.categories[0] ? d.categories[0].score : 1;
       const fx = (b.originX + b.width / 2) / AW, fy = (b.originY + b.height / 2) / AH, fw = b.width / AW;
+      if (conf < 0.6 || fw < 0.08) continue;   // ignore tiny / unsure "faces" (posters, plushies…)
       let score = fw;
       if (S.anchor) score /= 1 + 3 * Math.hypot(fx - S.anchor.fx, fy - S.anchor.fy);
       if (score > bestScore) { bestScore = score; best = { fx, fy, fw }; }
@@ -1054,14 +1056,28 @@
     S.stream = null;
   }
 
+  // Sizes are given in the camera sensor's own (landscape) orientation; the browser rotates the
+  // picture for portrait by itself. Asking for a portrait size makes iPhones crop = zoom in.
   function videoConstraints(relaxed) {
     if (relaxed) return { facingMode: S.facing };
-    const portrait = window.innerHeight >= window.innerWidth;
     return {
       facingMode: { ideal: S.facing },
-      width: { ideal: portrait ? 1080 : 1920 },
-      height: { ideal: portrait ? 1920 : 1080 }
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+      resizeMode: { ideal: 'none' }
     };
+  }
+
+  // Safety net: if the browser still applied a digital zoom, go back to the widest view.
+  async function widestView(track) {
+    try {
+      const st = track.getSettings ? track.getSettings() : {};
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      const min = caps.zoom && typeof caps.zoom.min === 'number' ? caps.zoom.min : null;
+      if (min !== null && typeof st.zoom === 'number' && st.zoom > min + 0.01) {
+        await track.applyConstraints({ width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ zoom: min }] });
+      }
+    } catch (_) {}
   }
 
   function waitForVideo() {
@@ -1095,6 +1111,7 @@
     }
     S.stream = stream;
     const track = stream.getVideoTracks()[0];
+    if (track) await widestView(track);
     const settings = (track && track.getSettings) ? track.getSettings() : {};
     S.mirror = (settings.facingMode || S.facing) !== 'environment';
     video.srcObject = stream;
